@@ -5,7 +5,9 @@ module ModPlasmasphere
   !
   ! Created on 1 February 2019 by Mei-Ching Fok. Code 673, NASA GSFC.
 
-  use ModCimiRestart, ONLY: NameRestartInDir, NameRestartOutDir
+  use ModCimiRestart, ONLY: NameRestartInDir, NameRestartOutDir, IsRestart
+  use ModIoUnit,      ONLY: UnitTmp_
+  use ModUtilities,   ONLY: open_file, close_file
 
   implicit none
 
@@ -44,7 +46,10 @@ module ModPlasmasphere
 
   ! Setup the trough by trough(6.6)*dipolevolumep(6.6) as in pbo_2.f
   ! number of particle per unit magnetic flux at trough 
-  real, parameter :: NTro=9.40e20   
+  !real, parameter :: NTro=9.40e20   
+  real, parameter :: NTro=9.40e18 !CBW in my experince this trhough 
+  !density is to high and keeps the outer parts of the CIMI plas full even
+  !when it shouldn't be. 2 orders of magnetic matches DGCPM
 
   real Bi(nl),dilatp(nl),dlatp(nl)
 
@@ -53,8 +58,10 @@ module ModPlasmasphere
   logical, public :: DoSavePlas
   real,    public :: DtPlasOutput
   logical, public :: UseCorePsModel=.true.
+  logical, save   :: IsFirstConvection = .true.
   real   , public :: PlasSpinUpTime=86400. !one day
-  real   , public :: PlasMinDensity = 1e4 !m-3 = 0.01/cc
+  !real   , public :: PlasMinDensity = 1e4 !m-3 = 0.01/cc
+  real   , public :: PlasMinDensity = 1e3 !m-3 = 0.001/cc matches BATS, CBW
   real   , public :: PlasmaPauseDensity = 1e7 !m-3 = 10/cc
 
   public :: unit_test_plasmasphere
@@ -271,6 +278,8 @@ contains
 
     real dtmax,dt,vl(nl,np),vp(nl,np)
     real dt1,cl(nl,np),cp(nl,np)
+
+    character(len=*), parameter:: NameSub = 'advance_plasmasphere'
     !--------------------------------------------------------------------------
 
     ! determine time step 
@@ -304,6 +313,36 @@ contains
           densityp(i,j)=Nion(i,j)/volumep(i,j)
        enddo
     enddo
+    call interpolate_plasmasphere_to_cimi
+    
+    !The Following is added by CBW
+    !If it is the first call, and we are not restarting, and we are using the CorePlasmasphere model, then we want to match, CIMI
+    !starting condition to DGCPM. 
+    if (UseCorePsModel .and. IsFirstConvection .and. .not. IsRestart) then !search restart
+    !This block replaces the normal CIMI start up by having it read
+    !The DGCPM plasmasphere density values at intialization from a file
+    !The file records the DGCPM values on the CIMI grid. The file
+    !contains 76 (Lat) * 48 (Lon) data points each
+    !14 digits long with leading zeros and 3 demical places. There is
+    !only one line, with the elements reported in column-major. There are
+    !four space characters seperating each entry in the line.
+    ! The Lat grid starts at 9.84033983 and goes to 88.9996559369669313
+    !The Lon grid starts at 0.0 and ends at 352.5
+    !np = nLatIn = 76, nt = nLonIn = 48
+    !I am not fimilar with reading files in fortran so I'm borrowing the
+    !set up from ModPlasmasphere:load_restart_plasmasphere
+
+      call open_file(file=trim(NameRestartInDir)//'cimi_intial_psphere_profile.dat',&
+      status='old',form='formatted',  NameCaller=NameSub)
+
+      read(UnitTmp_, '(3648ES25.16)') PlasDensity_C
+      !read(UnitTmp_,*) PlasDensity_C
+      call close_file !stackoverflow told me to add this line.
+
+      call interpolate_cimi_to_plasmasphere
+      IsFirstConvection = .false.
+    endif 
+    !Return to regular CIMI
 
     !after calculation interpolate data back to CIMI grid
     call interpolate_plasmasphere_to_cimi
@@ -574,6 +613,19 @@ contains
        enddo
     enddo
 
+    if (UseCorePsModel .and. IsFirstConvection .and. .not. IsRestart) then !serach restart
+      do iLon = 1, np
+         do iLat = 1, ibp(iLon)
+            LatLon_D(1) = xlatp(ilat)
+            LatLon_D(2) = pphi(iLon)
+
+            densityp(iLat,iLon) = &
+               bilinear(PlasDensity_C,1,nLatCimi,1,nLonCimi,LatLon_D, &
+               xlatCimi,phiCimi,DoExtrapolate=.true.)
+            Nion(iLat,iLon) = densityp(iLat,iLon) * volumep(iLat,iLon)
+         enddo
+      enddo
+    endif
 
   end subroutine interpolate_cimi_to_plasmasphere
 
@@ -599,10 +651,23 @@ contains
                PlasDensity_C(iLat,iLon)=PlasMinDensity
        enddo
     enddo
+   
+    if (UseCorePsModel .and. IsFirstConvection .and. .not. IsRestart) then !serach restart
+      do iLon = 1, np
+         do iLat = 1, ibp(iLon)
+            LatLon_D(1) = xlatp(ilat)
+            LatLon_D(2) = pphi(iLon)
+
+            densityp(iLat,iLon) = &
+               bilinear(PlasDensity_C,1,nLatCimi,1,nLonCimi,LatLon_D, &
+               xlatCimi,phiCimi,DoExtrapolate=.true.)
+            Nion(iLat,iLon) = densityp(iLat,iLon) * volumep(iLat,iLon)
+         enddo
+      enddo
+    endif
 
   end subroutine interpolate_plasmasphere_to_cimi
-
-
+  
   !-------------------------------------------------------------------------------
   subroutine Vconvect(dt,dt1,nrun,vl,vp,cl,cp)
     !-------------------------------------------------------------------------------

@@ -63,6 +63,7 @@ foreach (@Arguments){
     if(/^-earthswho$/i)         {$NewPlanet="EarthSwHO";           next};
     if(/^-earthho$/i)           {$NewPlanet="EarthHO";             next};
     if(/^-earthh$/i)            {$NewPlanet="EarthH";              next};
+    if(/^-earthrehpsh$/i)       {$NewPlanet="EarthReHpsH";         next};
     if(/^-griddefault$/i)       {$NewGrid="GridDefault";           next};
     if(/^-gridexpanded$/i)      {$NewGrid="GridExpanded";          next};
     if(/^-gridsouthexpanded$/i)      {$NewGrid="SouthGridExpanded";          next};
@@ -126,6 +127,7 @@ sub set_planet{
     $File .= " $Dir/ModEarthHOHe.f90" if $Planet eq "EarthHOHe";
     $File .= " $Dir/ModEarthHO.f90"   if $Planet eq "EarthHO";
     $File .= " $Dir/ModEarthH.f90"    if $Planet eq "EarthH";
+    $File .= " $Dir/ModEarthReHpsH.f90"    if $Planet eq "EarthReHpsH";
 
     &shell_command("cp $File src/ModPlanet.f90");
 
