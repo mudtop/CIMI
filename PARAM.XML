@@ -784,6 +784,34 @@ Sets minimum pressure passed to GM.
 
 </command>
 
+<command name="ELECTRONTEMPERATURERATIO">
+  <parameter name="ElectronTempRatio" type="real" />
+
+#ELECTRONTEMPERATURERATIO
+1/7.8     ElectronTempRatio
+
+Sets the temperature factor for ions and electrons used when coupling with GM 
+by assuming electrons make up the set fraction of the total pressure. Default
+values are shown.
+</command>
+
+<command name="GMTEMPERATUREFACTORS">
+  <parameter name="tFactor for species 1" type="real" />
+  <parameter name="tFactor for species 2" type="real" />
+  <parameter name="tFactor for electrons" type="real" />
+
+#GMTEMPERATUREFACTORS
+1/(1 + 1/7.8)       tFactor for species 1
+1/(1 + 1/7.8)       tFactor for species 2
+1/7.8/(1 + 1/7.8)   tFactor for electrons
+
+Allows manual setting of the temperature factors used when coupling with GM, 
+similar to #ELECTRONTEMPERATURE ratio. The number of input values must be equal
+to the total number of species (number of ion species + 1 for electrons)
+
+Default values are shown. 
+</command>
+
 <command name="DTSATOUT">
   <parameter name="DtSatOut" type="real" />
 
@@ -851,6 +879,12 @@ to linearly spaced. MinIonEnergy and MaxIonEnergy are the bounds for
 the energy array in keV; electron energies are multiplied by 10. The
 values displayed here result in CIMI's default energy grid regardless
 of #SETENERGYGRID being specified in PARAM.in.
+
+The M and K grid used for the simulation are set based on the minimum
+and maximum energies of the energy grid. Changing the minimum and
+maximum energies can affect the solution. Changing maximum energy
+to be smaller than the maximum energy of ring current ions is not 
+recommended.
 </command>
 
 <command name="RBSPENERGYGRID">
@@ -863,6 +897,17 @@ Command sets the output energy grid to exactly the energy centroids of
 the Van Allen Probes' MagEIS and REPT instruments. If this parameter
 is set, the #ENERGYGRID and #SETENERGYGRID commands are
 ignored. Default shown.
+
+</command>
+
+<command name="ELECTRONGRIDRATIO">
+  <parameter name="ElectronGridRatio" type="real" default="10." />
+
+#ELECTRONGRIDRATIO
+10.			ElectronGridRatio
+
+Sets the ratio between the electron and ion energy grids.  Electron energies
+are set to be the ion energies multiplied by this ratio. Default shown.
 
 </command>
 

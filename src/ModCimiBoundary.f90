@@ -40,6 +40,10 @@ contains
     integer :: ib1
     !---------------------------------------------------------------------------
 
+    ! If using separate GM electron pressure, all values should just be passed
+    ! without any temperature partitioning
+    if (UsePeGm) tFactor_I = 1.0
+    
     !set boundary density and temperature inside irm
     if (UseTotalRhoGm &
          .and. .not. UseMultiRhoGm &
@@ -217,6 +221,7 @@ contains
     real :: O_H_ratio, F107, Kp
     !--------------------------------------------------------------------------
     
+    if(tFactor_I(1) < 1) tFactor_I = tFactor_I / tFactor_I(1)
     ! If using Young et al and nSpec=3 then overwrite dFactor_I
     if(UseYoungEtAl .and. nSpec==3) then
        !Get Inputs

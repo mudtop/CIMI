@@ -15,6 +15,7 @@ module IM_wrapper
   public:: IM_finalize
 
   ! Coupling with IE
+  public:: IM_get_info_for_ie
   public:: IM_get_for_ie
   public:: IM_put_from_ie_mpi
   public:: IM_put_from_ie
@@ -31,7 +32,7 @@ contains
   !============================================================================
   subroutine IM_set_param(CompInfo, TypeAction)
 
-    ! Set CIMI parameters from IM section of PARAM.in 
+    ! Set CIMI parameters from IM section of PARAM.in
 
     use CON_comp_info
     use ModUtilities
@@ -40,6 +41,7 @@ contains
     use ModGmCimi,  ONLY: UseGm
     use ModIeCimi,  ONLY: UseIE
     use ModCimiGrid, ONLY: iProc,nProc,iComm
+    use ModCimi,    ONLY: DtCalcPrecip
 
     character (len=*), intent(in)     :: TypeAction ! which action to perform
     type(CompInfoType), intent(inout) :: CompInfo   ! component information
@@ -71,6 +73,11 @@ contains
     case('READ')
        call CIMI_set_parameters('READ')
     case('CHECK')
+       if (Couple_CC(IM_, IE_) % Dothis) then
+         if (Couple_CC(IM_, IE_) % Dt < DtCalcPrecip) then
+            DtCalcPrecip = Couple_CC(IM_, IE_) % Dt
+         end if
+       end if
        ! We should check and correct parameters here
        ! if(iProc==0)then
        !   call IM_write_prefix;  write(iUnitOut,*)&
@@ -287,7 +294,7 @@ contains
     ! The offset of the Buffer_IIV defining how many variables are passed before
     ! you get to densities and pressures
     integer, parameter :: Offset_ = 20
-    
+
     logical :: DoTest, DoTestMe
     character(len=*), parameter:: NameSub = 'IM_put_from_gm_crcm'
     !--------------------------------------------------------------------------
@@ -478,16 +485,16 @@ contains
     ! convert unit of locations X and Y
     StateBmin_IIV(:,:,1:2) = StateBmin_IIV(:,:,1:2)/rEarth ! m --> Earth Radii
 
-    ! convert unit of points around bmin for curvature 
+    ! convert unit of points around bmin for curvature
     StateBmin_IIV(:,:,6:20) = StateBmin_IIV(:,:,6:20)/rEarth ! m --> Earth Radii
-    
-    
+
+
     nPoint    = nPointLine
     nVarBmin = nVarIn
     ! Convert Units
     StateLine_VI(2,:) = StateLine_VI(2,:) / rEarth ! m --> Earth Radii
     StateLine_VI(3,:) = StateLine_VI(3,:) / rEarth ! m --> Earth Radii
-    
+
     ! save the GM inner Boundary which is taken to be the
     ! lowest field trace point
     rBodyGM=minval(StateLine_VI(3,:))
@@ -915,9 +922,16 @@ contains
              end if
           enddo; enddo
        case('PePar')
-          ! This is not yet implemented ...
-          if(DoTestMe) write(*,*) &
-               NameSub,": WARNING working on PePar, iVarCimi=", iVarCimi
+          do i=1,iSize; do j=1,jSize
+             if( i<iLatMin .or.  i > iba(j) ) then
+                Buffer_IIV(i,j,iVarCimi) = -1.
+             else
+                ! make sure pressure passed to GM is not lower than Pmin [nPa]
+                ! to avoid too low GM pressure (only ion pressure)
+                Buffer_IIV(i,j,iVarCimi) = &
+                     max(PressurePar_IC(e_,i,j), Pmin)*1e-9
+             end if
+          enddo; enddo
        case default
           call CON_stop(NameSub//': unknown NameVar=' &
                //trim(NameVarCouple_V(iVarCimi)))
@@ -1305,6 +1319,25 @@ contains
     RETURN
   end subroutine IM_put_from_ie_complete
   !============================================================================
+  subroutine IM_get_info_for_ie(nEngIM, EngIM)
+      ! Tell IE how many energy bins are used in IM output
+      use ModCimiGrid, ONLY: neng
+      use ModCimi, ONLY: energy
+      use ModCimiPlanet,ONLY: nspec
+
+      integer, intent(out) :: nEngIM
+      real, intent(out), optional :: EngIM(:, :)
+
+      !------------------------------------------------------------------------
+      nEngIM = neng
+      if (present(EngIM)) then
+         EngIM(1, :) = energy(1, :) ! Hydrogen Energy Grid
+         EngIM(2, :) = energy(nspec, :) ! Electron Energy Grid
+      endif
+
+  end subroutine IM_get_info_for_ie
+  !============================================================================
+
   subroutine IM_get_for_ie(nPoint,iPointStart,Index,Weight,Buff_V,nVar)
 
     ! Provide current for IE
@@ -1312,13 +1345,17 @@ contains
     ! indexes stored in Index and weights stored in Weight
     ! The variables should be put into Buff_V
 
-    use ModCimi,      ONLY: FAC_C, nLat=>np, nLon=>nt
+    use ModCimi,      ONLY: FAC_C, nLat=>np, nLon=>nt, Eje1, preP, preF
+    use ModCimiPlanet,ONLY: H_, O_, e_, He_, Sw_
+    use ModCimiGrid,  ONLY: neng
     use CON_router,   ONLY: IndexPtrType, WeightPtrType
+    use ModCimiTrace, ONLY: iba
 
     integer,intent(in)            :: nPoint, iPointStart, nVar
     real,intent(out)              :: Buff_V(nVar)
     type(IndexPtrType),intent(in) :: Index
     type(WeightPtrType),intent(in):: Weight
+
 
     integer :: iLat, iLon, iBlock, iPoint
     real    :: w
@@ -1348,13 +1385,38 @@ contains
        end if
 
        ! Only worry about the northern hemisphere....  IE can fix the southern hemisphere.
-
+       ! For now, southern hemisphere will be implemented soon
        if (iLat <= nLat .and. iLon <= nLon) then
-          Buff_V(1) = Buff_V(1) - w * FAC_C(iLat,iLon)/2.0 ! / 1.0e6
-          ! Fill with -1 for now. In the future we will determine these values
-          Buff_V(2) = -1.0
-          Buff_V(3) = -1.0
-
+          if(nVar >= 4) then
+              ! Put ions
+              Buff_V(1) = Buff_V(1) + w * PreF(H_, iLat, iLon, neng+2)
+              Buff_V(2) = Buff_V(2) + w * Eje1(H_, iLat, iLon)
+              ! Put Electrons
+              Buff_V(3) = Buff_V(3) + w * PreF(e_, iLat, iLon, neng+2)
+              Buff_V(4) = Buff_V(4) + w * Eje1(e_, iLat, iLon)
+          end if
+          if(nVar >= 5) then
+              ! Put boundary location
+              if(iLat <= iba(iLon)) Buff_V(5) = Buff_V(5) + w
+          end if
+          if(nVar==(5 + 2 * neng)) then
+              ! Put ions
+              Buff_V(6:5+neng) = Buff_V(6:5+neng) + w * &
+                      PreP(H_, iLat, iLon, 1:neng)
+              ! Put Electrons
+              Buff_V(6+neng:5+2*neng) = Buff_V(6+neng:5+2*neng) + w * &
+                      PreP(e_, iLat, iLon, 1:neng)
+          else if(nVar == 4 .or. nVar == 5) then
+            CYCLE
+          else
+              call CON_stop(NameSub//' CIMI coupling currently only uses '//&
+                            'nVar=4,5 or 5+2*neng')
+          end if
+          ! OLD IMPLEMENTATION
+          !Buff_V(1) = Buff_V(1) - w * FAC_C(iLat,iLon)/2.0 ! / 1.0e6
+          !! Fill with -1 for now. In the future we will determine these values
+          !Buff_V(2) = -1.0
+          !Buff_V(3) = -1.0
           !        Buff_V(1) = Buff_V(1) - w * birk(iLat,iLon)/2 / 1.0e6
           !        Buff_V(2) = Buff_V(2) + w * eflux(iLat,iLon,1)
           !        Buff_V(3) = Buff_V(3) + w * eavg(iLat,iLon,1) / 1000.0

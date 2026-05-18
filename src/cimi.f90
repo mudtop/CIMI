@@ -885,7 +885,7 @@ subroutine cimi_init
 
      endif ! end UseLogEGrid if statement
 
-     energy_ele( 1 : neng ) = 10. * energy_ion( 1 : neng )
+     energy_ele( 1 : neng ) = ElectronGridRatio * energy_ion( 1 : neng )
 
   endif ! end UseRBSPGrid if statement
 
@@ -3161,10 +3161,10 @@ subroutine cimi_precip_calc(dsec)
               dplel=plel(n,i,j,k,OpLossCone_)-plel(n,i,j,k,OpLossCone0_)
               if (dlel < 0..and.dplel < 0.) then
                  preF(n,i,j,k)=-dlel*1.6e-13/Asec     ! E flux in mW/m2
-                 preP(n,i,j,k)=-dplel                 ! number of particles
+                 preP(n,i,j,k)=-dplel/Asec            ! N flux in 1/m2/s
 
                  ! meanE for E>gride(je)
-                 if (k == neng+1) Eje1(n,i,j)=dlel/dplel
+                 if (k == neng+2) Eje1(n,i,j)=dlel/dplel
 
               endif
            enddo

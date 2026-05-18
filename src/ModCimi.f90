@@ -35,12 +35,12 @@ Module ModCimi
        OpWaves_ = 4, OpStrongDiff_ = 5, OpDecay_ = 6, &
        OpLossCone_ = 7, OpFLC_ = 8, OpLossCone0_ = 9
 ! Note order and number of operators has been changed Waves are added
-! and OpLossCone0_=8 is previous in time OpLossCone 
+! and OpLossCone0_=8 is previous in time OpLossCone
 
 ! Variables brought over from Module BoundaryCheck in
 ! ModCimiBoundary. neng can now have a variable size making it
 ! necessary that these variables be allocatable.
-  
+
   real, allocatable :: &
        vdr_q1(:,:,:), vdr_q3(:,:,:), vgyr_q1(:,:,:), vgyr_q3(:,:,:)
   real, allocatable :: &
@@ -54,7 +54,7 @@ Module ModCimi
 !   dimention because it's total energy
 
   logical :: IsStandAlone = .false.
-  logical :: DoCalcPrecip = .false.
+  logical :: DoCalcPrecip = .true.
   logical :: IsStrictDrift = .false.
   real :: DtCalcPrecip = 10.
 contains
@@ -85,9 +85,12 @@ contains
          eChangeLocal(nspec,nOperator),eChangeGlobal(nspec,nOperator), &
          eTimeAccumult_ICI(nspec,np,nt,neng+2), &
          pTimeAccumult_ICI(nspec,np,nt,neng+2))
-   
+
     allocate(preP(nspec,np,nt,neng+2), preF(nspec,np,nt,neng+2), &
          Eje1(nspec,np,nt))
+    preP = 0.0
+    preF = 0.0
+    Eje1 = 0.0
 
     allocate(energy(nspec,neng), Ebound(nspec,neng), delE(nspec,neng))
 
