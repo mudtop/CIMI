@@ -28,7 +28,7 @@ subroutine cimi_run(delta_t)
        brad => ro, ftv => volume, xo, yo, rb, irm, &
        ekev, iba, bo, pp, Have, sinA, vel, alscone, iw2, xmlto, bm, phi2o, &
        gather_field_trace, bcast_field_trace
-  use ModGmCimi, ONLY: Den_IC, UseGm, UseGmKp, KpGm
+  use ModGmCimi, ONLY: Den_IC, UseGm, UseGmKp, KpGm, UseGmAe, AeGm
   use ModIeCimi, ONLY: UseWeimer, pot
   use ModCimiPlot
   use ModCimiRestart, ONLY: IsRestart
@@ -224,8 +224,12 @@ subroutine cimi_run(delta_t)
            endif
         endif
      else
-        if(UseAeKyoto) then
+        if (UseGmAe) then
+           AE_temp=AeGm
+        else if(UseAeKyoto) then
            call interpolate_ae(CurrentTime, AE_temp)
+        else if (UseGm) then
+           AE_temp = 0.0
         else
            call CON_stop('IM error: Kp not used and no AE option.'//&
                 'One of the two is needed for waves.')
@@ -492,8 +496,15 @@ subroutine cimi_run(delta_t)
         call sume_cimi(OpWaves_)
         call timing_stop('cimi_WaveDiffusion')
 
-        if (.not.UseKpIndex) &
-             call interpolate_ae(CurrentTime, AE_temp)
+        if (.not.UseKpIndex) then
+           if (UseGmAe) then
+              AE_temp=AeGm
+           else if (UseAeKyoto) then
+              call interpolate_ae(CurrentTime, AE_temp)
+           else
+              AE_temp = 0.0
+           end if
+         end if
 
         if ( .not. DoCoupleSami .and. .not. UseCorePsModel) then
            if (UseGmKp) then
