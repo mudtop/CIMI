@@ -31,8 +31,8 @@ Module ModCimiPlanet
 
 
   !set density and temp factor
-  real, dimension(nspec) :: dFactor_I =(/1.0,0.0,1.0/)
-  real, dimension(nspec) :: tFactor_I =(/1.0,0.0,0.128205/)
+  real, dimension(nspec) :: dFactor_I =(/1.0,0.001,1.0/)
+  real, dimension(nspec) :: tFactor_I =(/1.0,1.0,0.128205/)
 
   !set plot parameters
   character(len=300), parameter :: &
