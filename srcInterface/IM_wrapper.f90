@@ -256,7 +256,7 @@ contains
          StateLine_VI, StateBmin_IIV, nPoint, nVarBmin,rBodyGm,iLatMin
     use ModCimiGrid,  ONLY: nLat => np, nLon => nt, iProc,xlatr
     use ModCimiPlanet, ONLY: rEarth => re_m, NameVarCouple,nVarImToGm,&
-         Sw_, H_, O_
+         Sw_, H_, O_, PsHp_, UseRecirculatedPs
     use ModTsyInput,  ONLY: xnswa,vswa,bxw,byw,bzw,nsw,iyear,iday,UseSmooth
     use ModPrerunField, ONLY: DoWritePrerun, save_prerun
     use CON_coupler, ONLY: nVarBuffer, GM_, IM_, &
@@ -435,6 +435,19 @@ contains
              DoFeedbackPs = .true.
           case('hppsp')
              !do nothing for incomming plasmasphere pressure
+          case('pshprho')
+             DoFeedbackPs = .true.
+             if (UseRecirculatedPs) then
+                UseMultiRhoGm = .true.
+                iBufferRho_I(PsHp_) = iVarBuffer+Offset_
+                iRho=iRho+1
+             endif
+          case('pshpp')
+             if (UseRecirculatedPs) then
+                UseMultiPGm = .true.
+                iBufferP_I(PsHp_) = iVarBuffer+Offset_
+                iP = iP+1
+             endif
           case default
              call CON_stop(NameSub//': unknown NameVarCouple='//trim(NameVar1))
           end select
@@ -711,7 +724,7 @@ contains
     ! DoAnisoPressureGMCoupling
     use ModCimiTrace, ONLY: iba
     use ModCimiPlanet, ONLY: &
-         nspec, amu_I, NameVarCouple, nVarImToGm, Sw_, H_, O_, e_
+         nspec, amu_I, NameVarCouple, nVarImToGm, Sw_, H_, O_, PsHp_, e_
     use ModConst,     ONLY: cProtonMass, cBoltzmann
     use ModUtilities,       ONLY: split_string
     use ModPlasmasphere, ONLY: PlasDensity_C
@@ -922,6 +935,27 @@ contains
                 ! PlasDensity_C (i,j) * Tplas * cBoltzmann * 1e-9
              end if
           enddo; enddo
+       case('PsHpRho')
+          do i=1,iSize; do j=1,jSize
+             if( i<iLatMin .or.  i > iba(j) &
+                  .or. .not.allocated(PlasDensity_C)) then
+                Buffer_IIV(i,j,iVarCimi) = -1.
+             else
+                Buffer_IIV(i,j,iVarCimi) = PlasDensity_C(i,j)*cProtonMass
+                ! PlasDensity_C (i,j)*cProtonMass
+             end if
+          enddo; enddo
+       case('PsHpP')
+          do i=1,iSize; do j=1,jSize
+             if( i<iLatMin .or.  i > iba(j) &
+                  .or. .not.allocated(PlasDensity_C)) then
+                Buffer_IIV(i,j,iVarCimi) = -1.
+             else
+                Buffer_IIV(i,j,iVarCimi) = &
+                     PlasDensity_C(i,j) * Tplas * cBoltzmann * 1e-9
+                ! PlasDensity_C (i,j) * Tplas * cBoltzmann * 1e-9
+             end if
+          enddo; enddo   
        case('PePar')
           do i=1,iSize; do j=1,jSize
              if( i<iLatMin .or.  i > iba(j) ) then
