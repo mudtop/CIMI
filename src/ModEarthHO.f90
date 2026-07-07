@@ -10,6 +10,8 @@ Module ModCimiPlanet
   !define the species extensions
   character(len=2) :: NameSpeciesExtension_I(nspec)=(/'_h','_o','_e'/)
 
+  logical :: UseRecirculatedPs = .false.
+
   !named index for species order
   integer :: H_=1, O_=2, e_=3
 

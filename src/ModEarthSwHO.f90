@@ -10,11 +10,13 @@ Module ModCimiPlanet
   !define the species extensions
   character(len=2) :: NameSpeciesExtension_I(nspec)=(/'sw','_h','_o','_e'/)
 
+  logical :: UseRecirculatedPs = .false.
+
   !named index for species order
   integer :: Sw_=1, H_=2, O_=3, e_=4
 
   !unset indexes needed for GM coupling
-  integer :: He_=-1
+  integer :: He_=-1, PsHp_=-1
 
   
   ! a0,a1,... are coef. of a polynomial which defines the 
