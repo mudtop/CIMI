@@ -1,3 +1,13 @@
+module ModCimiMethods
+
+    implicit none
+
+    private ! except
+
+    public:: cimi_init
+    public:: cimi_run
+
+contains
 subroutine cimi_run(delta_t)
 
   ! The main cimi code to update by one delta_t
@@ -20,14 +30,15 @@ subroutine cimi_run(delta_t)
        eChangeOperator_VICI, nOperator, &
        eChangeLocal, eChangeGlobal, &
        DoCalcPrecip, DtCalcPrecip, &
-       vdr_q3, eng_q3, vexb, dif_q3, Part_phot
+       vdr_q3, eng_q3, vexb, dif_q3, Part_phot, &
+       achar, vl, vp, fb, vlEa, vpEa, flux, psd
   use ModCimiPlanet, ONLY: &
        re_m, dipmom, Hiono, rc, nspec, amu_I, dFactor_I, tFactor_I
   use ModCimiTrace, ONLY: &
        fieldpara, &
        brad => ro, ftv => volume, xo, yo, rb, irm, &
        ekev, iba, bo, pp, Have, sinA, vel, alscone, iw2, xmlto, bm, phi2o, &
-       gather_field_trace, bcast_field_trace
+       gather_field_trace, bcast_field_trace, ionization
   use ModGmCimi, ONLY: Den_IC, UseGm, UseGmKp, KpGm, UseGmAe, AeGm
   use ModIeCimi, ONLY: UseWeimer, pot
   use ModCimiPlot
@@ -51,7 +62,7 @@ subroutine cimi_run(delta_t)
   use ModCoupleSami, ONLY:	DoCoupleSami
   use ModIndicesInterfaces
   use ModLstar,	ONLY:	&
-       Lstar_C, Lstarm, &
+       Lstar_C, Lstarm, Lstar_max, Lstarm_max, &
        calc_Lstar1, calc_Lstar2
   use ModPlasmasphere, ONLY:	&
        UseCorePsModel, PlasSpinUpTime, init_plasmasphere, &
@@ -76,11 +87,6 @@ subroutine cimi_run(delta_t)
   integer:: n, nstep
   integer, save :: ib0(nt)
   real:: delta_t
-  real:: flux(nspec,np,nt,neng,npit), psd(nspec,np,nt,nm,nk), &
-       vlEa(nspec,np,nt,neng,npit), vpEa(nspec,np,nt,neng,npit)
-  real:: achar(nspec,np,nt,nm,nk)
-  real:: vl(nspec,0:np,nt,nm,nk)=0.0, vp(nspec,0:np,nt,nm,nk)=0.0, &
-       fb(nspec,nt,nm,nk)
   integer:: iLat, iLon, iSpecies, iSat, iOperator
   logical:: IsFirstCall =.true.
   real::  AE_temp = 0., Kp_temp = 0.
@@ -131,6 +137,10 @@ subroutine cimi_run(delta_t)
         call gather_field_trace
      endif
 
+     ! Allocate lstar variables on all processors
+     if(.not. allocated(Lstar_C)) allocate(Lstar_C(np,nt), Lstar_max, &
+          Lstarm(np,nt,nk), Lstarm_max(nk))
+
      ! Trace lstar variables for initial_f2.
      if ( iProc == 0 ) then
 
@@ -147,7 +157,7 @@ subroutine cimi_run(delta_t)
      ! Broadcast Lstar variable to all PEs
      if (nProc > 1 ) then
         call MPI_bcast(Lstar_C,np*nt,MPI_REAL,0,iComm,iError)
-        call MPI_bcast(Lstarm,np*nt*nm,MPI_REAL,0,iComm,iError)
+        call MPI_bcast(Lstarm,np*nt*nk,MPI_REAL,0,iComm,iError)
      endif
 
   endif
@@ -540,7 +550,7 @@ subroutine cimi_run(delta_t)
      endif
 
      call timing_start('cimi_lossconeIM')
-     call lossconeIM(np,nt,nm,nk,nspec,iba,alscone,f2)
+     call lossconeIM(iba,alscone,f2,ionization,ekev)
      call sume_cimi(OpLossCone_)
      call timing_stop('cimi_lossconeIM')
 
@@ -737,6 +747,8 @@ subroutine cimi_init
   use ModCimi, 		ONLY: energy, Ebound, dele
   use ModTimeConvert,	ONLY: time_int_to_real, time_real_to_int
   use ModMpi
+  use CIMI_aurora, ONLY: init_mod_aurora
+
 
   implicit none
 
@@ -754,6 +766,8 @@ subroutine cimi_init
   real:: d2
 
   !----------------------------------------------------------------------------
+
+  call init_mod_aurora
 
   ! Set up proc distribution
 
@@ -1018,8 +1032,10 @@ subroutine cimi_init
   ! CIMI K grid, xk: Minimum value is 40 T^0.5 / m
   ! (~89 degrees at L = 1 R_E or ~87 degrees at L = 7.)
 
-  rsi = 1.47
+
   xk( 0 ) = 40.
+  xk(nk+1) = 4e6
+  rsi = (xk(nk+1)/xk(0))**(1/(real(nk)+1))
   rs1 = ( rsi - 1. ) / SQRT( rsi )
 
   ! In the following sutup:
@@ -1028,8 +1044,6 @@ subroutine cimi_init
      xk( i ) = xk( i - 1 ) * rsi
      dk( i ) = xk( i ) * rs1
   enddo
-
-  xk( nk + 1 ) = xk( nk ) * rsi
 
   ! Calculate Lfactor, which is used in subroutine driftV
   do i=0,np+1
@@ -1104,6 +1118,7 @@ subroutine initial_f2(nspec,np,nt,iba,amu_I,vel,xjac,ib0)
        d4Element_C,neng
   use ModCimiPlanet,		ONLY: 	NameSpeciesExtension_I
   use ModCimiTrace, ONLY: sinA,ro, ekev,pp,iw2,irm
+  use ModCimiUtil, ONLY: lintp2IM
 
   use ModMpi
 
@@ -1284,6 +1299,7 @@ subroutine boundaryIM(nspec,neng,np,nt,nm,nk,iba,irm,amu_I,xjac,energy,vel,fb)
   use ModCimiGrid, ONLY: MinLonPar,MaxLonPar
   use ModCimiTrace,  ONLY: sinA,ekev,iw2,pp
   use ModCimiBoundary, ONLY: BoundaryDens_IC,BoundaryTemp_IC,BoundaryTempPar_IC
+  use ModCimiUtil,     ONLY: ln_gamma
 
   implicit none
 
@@ -1301,7 +1317,7 @@ subroutine boundaryIM(nspec,neng,np,nt,nm,nk,iba,irm,amu_I,xjac,energy,vel,fb)
   real:: kappa,kappa_plus_one,kappa_minus_half,ln_gamma_diff,gamma_ratio
   real:: e_min
 
-  real, external:: ln_gamma
+  !real, external:: ln_gamma
   !----------------------------------------------------------------------------
   kappa=3.
   ! zk1=zkappa+1.
@@ -1383,35 +1399,6 @@ subroutine boundaryIM(nspec,neng,np,nt,nm,nk,iba,irm,amu_I,xjac,energy,vel,fb)
   enddo                         ! end of n loop
 
 end subroutine boundaryIM
-!==============================================================================
-real function ln_gamma(xx)
-
-  implicit none
-
-  real, intent(in) :: xx
-  
-  ! Calculate ln(gamma(xx))
-  ! Added from Mei-Ching's stanadalone CIMI to calculate the natural
-  ! logarithm of the gamma function, which is needed for calculating
-  ! kappa distributions for the electrons.  -Colin, 07/25/2015.
-
-  real, parameter:: stp = 2.50662827465d0
-  real, parameter:: cof(6) = [76.18009173d0, -86.50532033d0, 24.01409822d0,&
-       -1.231739516d0, 0.120858003d-2, -0.536382d-5]
-  real:: x, tmp, ser
-  integer:: j
-  !----------------------------------------------------------------------------
-  x = xx - 1
-  tmp = x + 5.5
-  tmp = (x + 0.5)*log(tmp) - tmp
-  ser = 1
-  do j = 1, 6
-     x = x + 1
-     ser = ser + cof(j)/x
-  enddo
-  ln_gamma = tmp + log(stp*ser)
-
-end function ln_gamma
 !==============================================================================
 subroutine ceparaIM(nspec,np,nt,nm,nk,irm,dt,vel,ekev,Have,achar)
 
@@ -1851,30 +1838,32 @@ subroutine driftIM(iw2,nspec,np,nt,nm,nk,dt,dlat,dphi,brad,rb,vl,vp, &
 
               if(nProc>1 ) then
 
-                 ! Prepare the buffer on each process to send
-                 buf2D_send( :, 1 : ( MaxLonPar - MinLonPar + 1 ) ) = &
-                      f2d( :, MinLonPar : MaxLonPar )
-                 ! Gather buffer from all processes
-                 call MPI_ALLGATHERV( buf2D_send, iSendCount, MPI_REAL, &
-                      buf2D_recv, iReceiveCount_P, iDisplacement_P, &
-                      MPI_REAL, iComm, iError )
-                 ! Store the entire buffer on each process
-                 f2d( :, : ) = buf2D_recv( :, : )
+                 if (nGhostLonLeft == 1 .and. nGhostLonRight == 2) then
+                    call MPI_Sendrecv( &
+                        f2d(1:np,MaxLonPar-nGhostLonLeft+1:MaxLonPar), &
+                        nGhostLonLeft*np, MPI_REAL, iProcRight, 3, &
+                        f2d(1:np,iLonLeft-nGhostLonLeft+1:iLonLeft),    &
+                        nGhostLonLeft*np, MPI_REAL, iProcLeft,  3, &
+                        iComm, iStatus_I, iError)
 
-                 ! Old MPI_Send and receive calls for ghost cells.
-!!$                 call MPI_send(f2d(1:np,MaxLonPar-nGhostLonLeft+1:MaxLonPar),&
-!!$                      nGhostLonLeft*np,&
-!!$                      MPI_REAL,iProcRight,3,iComm,iError)
-!!$                 call MPI_send(f2d(1:np,MinLonPar:MinLonPar+nGhostLonRight-1),&
-!!$                      nGhostLonRight*np,MPI_REAL,&
-!!$                      iProcLeft,4,iComm,iError)
-!!$                 !recieve f2d ghostcells from neigboring Procs
-!!$                 call MPI_recv(f2d(1:np,iLonLeft-nGhostLonLeft+1:iLonLeft),&
-!!$                      nGhostLonLeft*np,MPI_REAL,&
-!!$                      iProcLeft,3,iComm,iStatus_I,iError)
-!!$                 call MPI_recv(f2d(1:np,iLonRight:iLonRight+nGhostLonRight-1),&
-!!$                      nGhostLonRight*np,MPI_REAL,&
-!!$                      iProcRight,4,iComm,iStatus_I,iError)
+                    call MPI_Sendrecv( &
+                        f2d(1:np,MinLonPar:MinLonPar+nGhostLonRight-1), &
+                        nGhostLonRight*np, MPI_REAL, iProcLeft,  4, &
+                        f2d(1:np,iLonRight:iLonRight+nGhostLonRight-1), &
+                        nGhostLonRight*np, MPI_REAL, iProcRight, 4, &
+                        iComm, iStatus_I, iError)
+
+                 else
+                    ! Prepare the buffer on each process to send
+                    buf2D_send( :, 1 : ( MaxLonPar - MinLonPar + 1 ) ) = &
+                        f2d( :, MinLonPar : MaxLonPar )
+                    !! Gather buffer from all processes
+                    call MPI_ALLGATHERV( buf2D_send, iSendCount, MPI_REAL, &
+                        buf2D_recv, iReceiveCount_P, iDisplacement_P, &
+                        MPI_REAL, iComm, iError )
+                    !! Store the entire buffer on each process
+                    f2d( :, : ) = buf2D_recv( :, : )
+                 end if
             
                  !send fb0 ghostcells
                  call MPI_send(fb0(MinLonPar:MinLonPar+nGhostLonRight-1),&
@@ -2308,7 +2297,7 @@ subroutine CalcDecay_cimi(deltaT)
   ! Version History:
   ! 2018-02-20 CMK: Added and tested
 
-  use ModCimi,       	ONLY: f2, DecayTimescale
+  use ModCimi,       	ONLY: f2, DecayTimescale, UseElectronDecay
   use ModCimiGrid,   	ONLY: np, nt, nm, nk, MinLonPar, MaxLonPar
   use ModCimiPlanet, 	ONLY: nspec
   use ModCimiTrace, 	ONLY: iba
@@ -2317,40 +2306,149 @@ subroutine CalcDecay_cimi(deltaT)
 
   real, intent(in) :: deltaT
 
-  integer:: n,i,j,k,m
+  integer:: n,i,j,k,m, maxSpec
   real:: DecayRate
   !----------------------------------------------------------------------------
   DecayRate = EXP( -( deltaT / DecayTimescale ) )
+  
+  maxSpec = nspec - 1
+  if (UseElectronDecay) maxSpec = nspec
 
-  f2(1:nspec-1,:,:,:,:) = f2(1:nspec-1,:,:,:,:) * DecayRate
+  f2(1:maxSpec,:,MinLonPar:MaxLonPar,:,:) = &
+         f2(1:maxSpec,:,MinLonPar:MaxLonPar,:,:) * DecayRate
 
 end subroutine CalcDecay_cimi
 !==============================================================================
-subroutine lossconeIM(np,nt,nm,nk,nspec,iba,alscone,f2)
+subroutine lossconeIM(iba,alscone,f2,ionization,ekev)
 
   ! Calculate the change of f2 due to lossconeIM loss
 
-  use ModCimi, ONLY: MinLonPar,MaxLonPar
+  use ModCimi, ONLY: MinLonPar,MaxLonPar, nspec, np, nt, nm, nk, neng, energy,&
+        precipEnergyLoss, precipNumberLoss
+  use ModCimiTrace, ONLY: UsePrecipEnergyLoss
+  use ModCimiGrid, ONLY: d4Element_C
 
   implicit none
 
-  integer, intent(in):: np,nt,nm,nk,nspec,iba(nt)
-  real, intent(in):: alscone(nspec,np,nt,nm,nk)
+  integer, intent(in):: iba(nt)
+  real, intent(in):: alscone(nspec,np,nt,nm,nk), &
+                     ionization(nspec,np,nt,nm,nk), ekev(nspec,np,nt,nm,nk)
   real, intent(inout):: f2(nspec,np,nt,nm,nk)
 
-  integer:: n, i, j, k, m
+  integer:: n, i, j, k, m, m2, iLow, iHigh
+  real :: newf2(nm), newEnergy, weightLow, weightHigh, egrid(nspec, neng+1)
   !----------------------------------------------------------------------------
-  do n=1,nspec
-     do j=MinLonPar,MaxLonPar
+  egrid(:,1:neng) = energy(:,1:neng)
+  egrid(:,neng+1) = 1e10
+  precipEnergyLoss(:,:,MinLonPar:MaxLonPar,:) = 0.0
+  precipNumberLoss(:,:,MinLonPar:MaxLonPar,:) = 0.0
+  if (UsePrecipEnergyLoss) then
+    do k=1,nk; do j = MinLonPar,MaxLonPar; do i=1,iba(j); do n=1,nspec
+      newf2 = 0
+      Minv: do m=1,nm
+        if (ionization(n,i,j,m,k) <= 0.0) then
+          newf2(m) = newf2(m) + f2(n,i,j,m,k)
+          cycle Minv
+        end if
+        ! new energy is fraction of original energy
+        newEnergy = ekev(n,i,j,m,k) * &
+            (1 - ionization(n,i,j,m,k))
+        ! reinterpolate f2 grid based on new energy grid assuming that
+        ! pitch angle does not change, meaning that only the 
+        ! m invariant grid is changing
+
+        ! This flux always stays put
+        ! Note that more flux will still get added to newf2(m) if ionization
+        ! is close to 0
+        newf2(m) = newf2(m) + f2(n,i,j,m,k) * alscone(n,i,j,m,k)
+        
+        if (newEnergy >= ekev(n,i,j,1,k)) then
+          mInvScan: do m2 = 1, nm-1
+            if (newEnergy >= ekev(n,i,j,m2,k) .and. &
+                newEnergy < ekev(n,i,j,m2+1,k)) then
+              iLow = m2; iHigh = m2 + 1
+              exit mInvScan
+            else if (m2 == nm-1) then
+              ! Handle edge case that should never happen just in case
+              iLow = nm - 1
+              iHigh = nm  
+            end if
+          end do mInvScan
+
+          weightLow  = (newEnergy - ekev(n,i,j,iLow,k)) / &
+                      (ekev(n,i,j,iHigh,k) - ekev(n,i,j,iLow,k))
+          weightHigh = 1. - weightLow
+          weightLow  = weightLow  * (1 - alscone(n,i,j,m,k))
+          weightHigh = weightHigh * (1 - alscone(n,i,j,m,k))
+
+          newf2(iLow)  = newf2(iLow)  + weightLow  * f2(n,i,j,m,k)
+          newf2(iHigh) = newf2(iHigh) + weightHigh * f2(n,i,j,m,k)
+        end if
+        
+        ! if below lowest energy bin, add precip losses to lowest bin
+        if (ekev(n,i,j,m,k) < energy(n,1)) then
+          precipEnergyLoss(n,i,j,1) = precipEnergyLoss(n,i,j,1) + &
+              f2(n,i,j,m,k) * (1 - alscone(n,i,j,m,k)) * &
+              (newEnergy - ekev(n,i,j,m,k)) * d4Element_C(n,i,k,m)
+          precipNumberLoss(n,i,j,1) = precipNumberLoss(n,i,j,1) - &
+              f2(n,i,j,m,k) * (1-alscone(n,i,j,m,k)) * &
+              ionization(n,i,j,m,k) * d4Element_C(n,i,k,m)
+        else
+          ! Otherwise, loop through energy bins to find where to add losses
+          SavePrecip: do m2 = 1, neng
+            if (ekev(n,i,j,m,k) >= energy(n,m2) .and. &
+                ekev(n,i,j,m,k) < energy(n,m2+1)) then
+              weightLow = (ekev(n,i,j,m,k) - energy(n,m2)) / &
+                  (energy(n,m2+1) - energy(n,m2))
+              weightHigh = 1. - weightLow
+              ! Add precip losses to energy bins that border current energy
+              ! Energy losses = f2 * (1-alscone) * (newEnergy-ekev) which is 
+              ! equivalent to f2 * (1-alscone) * ionization * ekev
+              ! Number losses = - f2 * (1-alscone) * ionization
+              ! Both values are negative
+              precipEnergyLoss(n,i,j,m2) = precipEnergyLoss(n,i,j,m2) + &
+                  f2(n,i,j,m,k) * (1-alscone(n,i,j,m,k)) * &
+                  (newEnergy - ekev(n,i,j,m,k)) * weightLow * &
+                  d4Element_C(n,i,k,m)
+              precipEnergyLoss(n,i,j,m2+1) = precipEnergyLoss(n,i,j,m2+1) + &
+                  f2(n,i,j,m,k) * (1-alscone(n,i,j,m,k)) * &
+                  (newEnergy - ekev(n,i,j,m,k)) * weightHigh * &
+                  d4Element_C(n,i,k,m)
+              precipNumberLoss(n,i,j,m2) = precipNumberLoss(n,i,j,m2) - &
+                  f2(n,i,j,m,k) * (1-alscone(n,i,j,m,k)) * &
+                  ionization(n,i,j,m,k) * weightLow * d4Element_C(n,i,k,m)
+              precipNumberLoss(n,i,j,m2+1) = precipNumberLoss(n,i,j,m2+1) - &
+                  f2(n,i,j,m,k) * (1-alscone(n,i,j,m,k)) * &
+                  ionization(n,i,j,m,k) * weightHigh * d4Element_C(n,i,k,m)
+              exit SavePrecip
+            end if
+          end do SavePrecip 
+        end if
+        ! Also add precip losses to summed value
+        precipEnergyLoss(n,i,j,neng+2) = precipEnergyLoss(n,i,j,neng+2) + &
+            f2(n,i,j,m,k) * (1-alscone(n,i,j,m,k)) * &
+            (newEnergy - ekev(n,i,j,m,k)) * d4Element_C(n,i,k,m)
+        precipNumberLoss(n,i,j,neng+2) = precipNumberLoss(n,i,j,neng+2) - &
+            f2(n,i,j,m,k) * (1-alscone(n,i,j,m,k)) * ionization(n,i,j,m,k) &
+            * d4Element_C(n,i,k,m)
+      end do Minv
+      f2(n,i,j,:,k) = newf2(:)
+    enddo; enddo; enddo; enddo;
+    return 
+
+  end if
+
+  do k=1,nk
+    do m=1,nm
+      do j=MinLonPar,MaxLonPar
         do i=1,iba(j)
-           do k=1,nm
-              do m=1,nk
-                 if (alscone(n,i,j,k,m) < 1.) &
-                      f2(n,i,j,k,m)=f2(n,i,j,k,m)*alscone(n,i,j,k,m)
-              enddo
-           enddo
+          do n=1,nspec
+            if (alscone(n,i,j,m,k) < 1.) &
+                f2(n,i,j,m,k)=f2(n,i,j,m,k)*alscone(n,i,j,m,k)
+          enddo
         enddo
-     enddo
+      enddo
+    enddo
   enddo
 
 end subroutine lossconeIM
@@ -2560,6 +2658,7 @@ subroutine cimi_output( &
   use ModCimiBoundary, ONLY: CIMIboundary, Outputboundary
   use ModCimi, ONLY: vdr_q1,vdr_q3,vgyr_q1,vgyr_q3,eng_q1, &
        eng_q3,vexb,dif_q1,dif_q3,Part_phot
+  use ModCimiUtil, ONLY: lintp2aIM
 
   implicit none
 
@@ -3141,8 +3240,9 @@ subroutine cimi_precip_calc(dsec)
   use ModCimi,			ONLY:	&
        preF, preP, Eje1, &
        xlel => eChangeOperator_VICI, plel => pChangeOperator_VICI, &
-       OpLossCone_, OpLossCone0_
-  use ModCimiTrace, 		ONLY:	iba
+       OpLossCone_, OpLossCone0_, OpFLC_, OpFLC0_, &
+       precipEnergyLoss, precipNumberLoss
+  use ModCimiTrace, 		ONLY:	iba, UsePrecipEnergyLoss
   use ModCimiGrid,		ONLY:	&
        nProc,iProc,iComm,MinLonPar,MaxLonPar,nt,np,neng,xlatr,xmlt,dlat
   use ModCimiPlanet,		ONLY: 	nspec, re_m, rc
@@ -3151,8 +3251,10 @@ subroutine cimi_precip_calc(dsec)
 
   implicit none
 
-  real:: dsec, dlel, dplel, area, area1, Asec
+  real:: dsec, dlel, dplel, dlel_lc, dplel_lc, dlel_flc, dplel_flc, area, &
+         area1, Asec
   integer:: n, i, j, k
+  logical :: useFlc, useLossCone
   !----------------------------------------------------------------------------
   preF(1:nspec,1:np,1:nt,1:neng+2)=0.
   preP(1:nspec,1:np,1:nt,1:neng+2)=0.
@@ -3165,18 +3267,47 @@ subroutine cimi_precip_calc(dsec)
         do i=1,iba(j)
            area=area1*cos(xlatr(i))*dlat(i)            ! area in m^2
            Asec=area*dsec
-           do k=1,neng+2
-              dlel=xlel(n,i,j,k,OpLossCone_)-xlel(n,i,j,k,OpLossCone0_)
-              dplel=plel(n,i,j,k,OpLossCone_)-plel(n,i,j,k,OpLossCone0_)
-              if (dlel < 0..and.dplel < 0.) then
-                 preF(n,i,j,k)=-dlel*1.6e-13/Asec     ! E flux in mW/m2
-                 preP(n,i,j,k)=-dplel/Asec            ! N flux in 1/m2/s
+           Energy: do k=1,neng+2
+              if(UsePrecipEnergyLoss) then
+                if (precipEnergyLoss(n,i,j,k) >= 0. .or. &
+                    precipNumberLoss(n,i,j,k) >= 0.) then
+                  preF(n,i,j,k)=0.
+                  preP(n,i,j,k)=0.     
+                  if (k == neng+2) Eje1(n,i,j)=0.             
+                else
+                  preF(n,i,j,k)=-precipEnergyLoss(n,i,j,k)*1.6e-13/Asec
+                  preP(n,i,j,k)=-precipNumberLoss(n,i,j,k)/Asec
+                  ! meanE for E>gride(je)
+                  if (k == neng+2) Eje1(n,i,j)=precipEnergyLoss(n,i,j,k) &
+                                              /precipNumberLoss(n,i,j,k)
+                end if
+              else
+                dlel_lc=xlel(n,i,j,k,OpLossCone_)-xlel(n,i,j,k,OpLossCone0_)
+                dplel_lc=plel(n,i,j,k,OpLossCone_)-plel(n,i,j,k,OpLossCone0_)
+                dlel_flc=xlel(n,i,j,k,OpFLC_)-xlel(n,i,j,k,OpFLC0_)
+                dplel_flc=plel(n,i,j,k,OpFLC_)-plel(n,i,j,k,OpFLC0_)
+                useFlc = (dlel_flc < 0. .and. dplel_flc < 0.)
+                useLossCone = (dlel_lc < 0. .and. dplel_lc < 0.)
+                dlel = 0
+                dplel = 0
+                if (useLossCone) then
+                    dlel = dlel + dlel_lc
+                    dplel = dplel + dplel_lc
+                end if
+                if (useFlc) then
+                    dlel = dlel + dlel_flc
+                    dplel = dplel + dplel_flc
+                end if
+                if (useLossCone .or. useFlc) then
+                  preF(n,i,j,k)=-dlel*1.6e-13/Asec     ! E flux in mW/m2
+                  preP(n,i,j,k)=-dplel/Asec            ! N flux in 1/m2/s
 
-                 ! meanE for E>gride(je)
-                 if (k == neng+2) Eje1(n,i,j)=dlel/dplel
+                  ! meanE for E>gride(je)
+                  if (k == neng+2) Eje1(n,i,j)=dlel/dplel
+                end if
 
               endif
-           enddo
+           enddo Energy
         enddo
      enddo
   enddo
@@ -3184,6 +3315,9 @@ subroutine cimi_precip_calc(dsec)
   ! Overwrites the OpLossCone0_ array with the current time information.
   xlel(:,:,:,:,OpLossCone0_) = xlel(:,:,:,:,OpLossCone_)
   plel(:,:,:,:,OpLossCone0_) = plel(:,:,:,:,OpLossCone_)
+  ! Do same for OpFLC0_ array
+  xlel(:,:,:,:,OpFLC0_) = xlel(:,:,:,:,OpFLC_)
+  plel(:,:,:,:,OpFLC0_) = plel(:,:,:,:,OpFLC_)
 
 end subroutine cimi_precip_calc
 !==============================================================================
@@ -3290,308 +3424,6 @@ subroutine FLS_2D(np,nt,iba,fb0,fb1,cl,cp,f2d,fal,fap,fupl,fupp)
 end subroutine FLS_2D
 !==============================================================================
 
-! OLD LINTP
-!!-----------------------------------------------------------------------
-! subroutine lintp(xx,yy,n,x,y,ier)
-!  !-----------------------------------------------------------------------
-!  !  1-D interpolation.  xx must be increasing or decreasin monotonically.
-!  !  x is between xx(1) and xx(n)
-!  !
-!  !  input: xx,yy,n,x
-!  !  output: y,ier
-!
-!  implicit none
-!
-!  integer:: n,ier,i,jl,ju,jm,j
-!  real:: xx(n),yy(n),x,y,d
-!
-!  ier = 0
-!
-!  ! Make sure xx is increasing or decreasing monotonically
-!  do i=2,n
-!     if (xx(n) > xx(1).and.xx(i) < xx(i-1)) then
-!        write(*,*) ' lintp: xx is not increasing monotonically '
-!        write(*,*) n,xx
-!        stop
-!     endif
-!     if (xx(n) < xx(1).and.xx(i) > xx(i-1)) then
-!        write(*,*) ' lintp: xx is not decreasing monotonically '
-!        write(*,*) n,xx
-!        stop
-!     endif
-!  enddo
-!
-!  ! Set ier=1 if out of range
-!  if (xx(n) > xx(1)) then
-!     if (x < xx(1).or.x > xx(n)) ier=1
-!  else
-!     if (x > xx(1).or.x < xx(n)) ier=1
-!  endif
-!  if (ier == 1) then
-!     write(*,*) ' Error: ier == 1'
-!     print *,'n,x ',n,x
-!     print *,'xx(1:n) ',xx(1:n)
-!     stop
-!  endif
-!
-!  ! initialize lower and upper values
-!  jl=1
-!  ju=n
-!
-!  ! if not done compute a midpoint
-! 10 if (ju-jl > 1) then
-!     jm=(ju+jl)/2
-!     ! now replace lower or upper limit
-!     if ((xx(n) > xx(1)).eqv.(x > xx(jm))) then
-!        jl=jm
-!     else
-!        ju=jm
-!     endif
-!     ! try again
-!     go to 10
-!  endif
-!
-!  ! this is the j
-!  j=jl      ! if x <= xx(1) then j=1
-!  ! if x > x(j).and.x <= x(j+1) then j=j
-!  ! if x > x(n) then j=n-1
-!  d=xx(j+1)-xx(j)
-!  y=(yy(j)*(xx(j+1)-x)+yy(j+1)*(x-xx(j)))/d
-!
-! end subroutine lintp
-
-subroutine lintp2aIM(x,y,v,nx,ny,x1,y1,v1)
-
-  ! Calculate 2-d interplation. x is 2-D and y is 1-D.
-  ! The grid can be distorted.
-
-  implicit none
-
-  integer, intent(in):: nx, ny
-  real, intent(in) :: x(nx,ny), y(ny), v(nx,ny), x1, y1
-  real, intent(out):: v1
-
-  integer:: j, j1, i, i1, i2, i3
-  real:: a, a1, b, x1d(1000)   ! max(nx)=1000
-  real:: q00, q01, q10, q11
-  !----------------------------------------------------------------------------
-  call locate1IM(y,ny,y1,j)
-  j1 = j+1
-  if (j == 0.or.j1 > ny) then
-     b = 1
-     if (j == 0)  j  = j1
-     if (j1 > ny) j1 = j
-  else
-     b = (y1 - y(j))/(y(j+1) - y(j))
-  endif
-
-  ! Interpolate along y(j)
-  x1d(1:nx) = x(1:nx,j)
-  call locate1IM(x1d,nx,x1,i)
-  i1 = i + 1
-  if (i == 0.or.i1 > nx) then
-     a = 1
-     if (i == 0) i = i1
-     if (i1 > nx) i1 = i
-  else
-     a = (x1-x1d(i))/(x1d(i+1)-x1d(i))
-  endif
-
-  ! Interpolate along y(j1)
-  x1d(1:nx) = x(1:nx,j1)
-  call locate1IM(x1d,nx,x1,i2)
-  i3 = i2 + 1
-  if (i2 == 0 .or. i3 > nx) then
-     a1 = 1
-     if (i2 == 0) i2 = i3
-     if (i3 > nx) i3 = i2
-  else
-     a1 = (x1-x1d(i2))/(x1d(i2+1)-x1d(i2))
-  endif
-
-  ! Coefficients for v(i,j) and v(i1,j)
-  q00 = (1-a)*(1-b)
-  q10 = a*(1-b)
-
-  ! Coefficients for v(i2,j1) and v(i3,j1)
-  q01 = (1-a1)*b
-  q11 = a1*b
-
-  v1 = q00*v(i,j) + q01*v(i2,j1) + q10*v(i1,j) + q11*v(i3,j1)
-
-end subroutine lintp2aIM
-!==============================================================================
-subroutine lintp2IM(x, y, v, nx, ny, x1, y1, v1)
-
-  ! Do 2-D interpolation. x and y must be increasing or decreasing
-  ! monotonically
-
-  implicit none
-  
-  integer, intent(in):: nx, ny
-  real, intent(in):: x(nx), y(ny), v(nx,ny), x1, y1
-  real, intent(out):: v1
-
-  integer:: i, j, i1, j1
-  real:: a, b, q00, q01, q10, q11
-  !----------------------------------------------------------------------------
-  call locate1IM(x,nx,x1,i)
-  if (i > (nx-1)) i=nx-1      ! extrapolation if out of range
-  if (i < 1) i=1              ! extrapolation if out of range
-  i1 = i + 1
-  a = (x1 - x(i))/(x(i1) - x(i))
-
-  call locate1IM(y,ny,y1,j)
-  if (j > (ny-1)) j=ny-1      ! extrapolation if out of range
-  if (j < 1) j=1              ! extrapolation if out of range
-  j1 = j + 1
-  b = (y1 - y(j))/(y(j1) - y(j))
-
-  q00 = (1-a)*(1.-b)
-  q01 = (1-a)*b
-  q10 = a*(1-b)
-  q11 = a*b
-  v1 = q00*v(i,j) + q01*v(i,j1) + q10*v(i1,j) + q11*v(i1,j1)
-
-end subroutine lintp2IM
-!==============================================================================
-subroutine locate1IM(xx, n, x, j)
-
-  ! Return a value of j such that x is between xx(j) and xx(j+1).
-  ! xx must be increasing or decreasing monotonically.
-  ! If xx is increasing:
-  !    If x=xx(m), j=m-1 so if x=xx(1), j=0  and if x=xx(n), j=n-1
-  !    If x < xx(1), j=0  and if x > xx(n), j=n
-  ! If xx is decreasing:
-  !    If x=xx(m), j=m so if x=xx(1), j=1  and if x=xx(n), j=n
-  !    If x > xx(1), j=0  and if x < xx(n), j=n
-  !
-  ! Make sure xx is increasing or decreasing monotonically
-  ! Input: xx,n,x
-  ! Output: j
-
-  use ModUtilities, ONLY: CON_stop
-
-  implicit none
-
-  integer, intent(in):: n
-  real,    intent(in):: xx(n), x
-  integer, intent(out):: j
-
-  integer:: i, jl, ju, jm
-  !----------------------------------------------------------------------------
-  do i=2,n
-     if (xx(n) > xx(1).and.xx(i) < xx(i-1)) then
-        write(*,*) ' locate1IM: xx is not increasing monotonically '
-        write(*,*) n, (xx(j),j=1,n)
-        call CON_stop('CIMI stopped in locate1IM')
-     endif
-     if (xx(n) < xx(1).and.xx(i) > xx(i-1)) then
-        write(*,*) ' locate1IM: xx is not decreasing monotonically '
-        write(*,*) ' n, xx  ',n,xx
-        call CON_stop('CIMI stopped in locate1IM')
-     endif
-  enddo
-
-  jl=0
-  ju=n+1
-  test: do
-     if (ju-jl <= 1) EXIT test
-     jm=(ju+jl)/2
-     if ((xx(n) > xx(1)).eqv.(x > xx(jm))) then
-        jl=jm
-     else
-        ju=jm
-     endif
-  end do test
-  j=jl
-
-end subroutine locate1IM
-!==============================================================================
-subroutine lintp3IM(x, y, z, v, nx, ny, nz, x1, y1, z1, v1)
-
-  ! 3-d interplation to position x1, y1, z1
-
-  implicit none
-
-  integer, intent(in):: nx, ny, nz
-  real, intent(in):: x(nx),y(ny),z(nz),v(nx,ny,nz)
-  real, intent(in):: x1, y1, z1
-  real, intent(out):: v1
-
-  integer:: i, j, k, i1, j1, k1
-  real:: a, b, c, q000, q001, q010, q011, q100, q101, q110, q111
-  !----------------------------------------------------------------------------
-  call locate1IM(x,nx,x1,i)
-  if (i > (nx-1)) i=nx-1      ! extrapolation if out of range
-  if (i < 1) i=1              ! extrapolation if out of range
-
-  call locate1IM(y,ny,y1,j)
-  if (j > (ny-1)) j=ny-1      ! extrapolation if out of range
-  if (j < 1) j=1              ! extrapolation if out of range
-
-  call locate1IM(z,nz,z1,k)
-  if (k > (nz-1)) k=nz-1      ! extrapolation if out of range
-  if (k < 1) k=1              ! extrapolation if out of range
-
-  i1 = i + 1
-  j1 = j + 1
-  k1 = k + 1
-  a = (x1 - x(i))/(x(i1) - x(i))
-  b = (y1 - y(j))/(y(j1) - y(j))
-  c = (z1 - z(k))/(z(k1) - z(k))
-
-  q000 = (1-a)*(1.-b)*(1.-c)*v(i,j,k)
-  q001 = (1-a)*(1.-b)*c*v(i,j,k1)
-  q010 = (1-a)*b*(1.-c)*v(i,j1,k)
-  q011 = (1-a)*b*c*v(i,j1,k1)
-  q100 = a*(1-b)*(1.-c)*v(i1,j,k)
-  q101 = a*(1-b)*c*v(i1,j,k1)
-  q110 = a*b*(1-c)*v(i1,j1,k)
-  q111 = a*b*c*v(i1,j1,k1)
-
-  v1 = q000 + q001 + q010 + q011 + q100 + q101 + q110 + q111
-
-end subroutine lintp3IM
-!==============================================================================
-subroutine tridagIM(a,b,c,r,u,n,ier)
-
-  implicit none
-
-  integer, parameter:: nmax = 100
-  integer:: n, ier, j
-  real:: gam(nmax),a(n),b(n),c(n),r(n),u(n),bet
-  !----------------------------------------------------------------------------
-
-  ! problem can be simplified to n-1
-  if(b(1) == 0.)then
-     ier = 1
-     RETURN
-  endif
-  ier = 0
-  bet=b(1)
-  u(1)=r(1)/bet
-
-  ! decomposition and forward substitution
-  do j=2, n
-     gam(j) = c(j-1)/bet
-     bet = b(j)-a(j)*gam(j)
-
-     !    algotithm fails
-     if(bet == 0.)then
-        ier = 2
-        RETURN
-     endif
-     u(j)=(r(j)-a(j)*u(j-1))/bet
-  end do
-  ! back substitution
-  do j=n-1,1,-1
-     u(j) = u(j) - gam(j+1)*u(j+1)
-  end do
-
-end subroutine tridagIM
-!==============================================================================
-
 ! Old CLOSED SUBROUTINE
 ! subroutine closed(n1,n2,yy,dx,ss)
 
@@ -3612,3 +3444,4 @@ end subroutine tridagIM
 !
 ! end subroutine closed
 
+end module ModCimiMethods

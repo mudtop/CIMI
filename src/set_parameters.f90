@@ -11,11 +11,12 @@ subroutine CIMI_set_parameters(NameAction)
        DoLstarInitialization
   use ModCimiPlot
   use ModCimiTrace,	 ONLY: UseEllipse, UseSmooth, UseCorotation, &
-       UsePotential, SmoothWindow, imod, iLatTest, iLonTest, DeltaRMax,xmltlim
+       UsePotential, SmoothWindow, imod, iLatTest, iLonTest, DeltaRMax, &
+       xmltlim, UseAltitudePrecip, UsePrecipEnergyLoss
   use ModCimi,		 ONLY: UseMcLimiter, BetaLimiter, time, Pmin, &
        IsStandAlone, UseStrongDiff, &
        dt, dtmax, DoCalcPrecip, DtCalcPrecip, IsStrictDrift,&
-       UseDecay, DecayTimescale, UseFLC
+       UseDecay, DecayTimescale, useElectronDecay, UseFLC
   use ModCimiRestart,	 ONLY: IsRestart, DtSaveRestart
   use ModCimiPlanet,	 ONLY: nspec, dFactor_I, tFactor_I
   use ModImTime,	 ONLY: iStartTime_I, TimeMax
@@ -758,6 +759,8 @@ subroutine CIMI_set_parameters(NameAction)
         call read_var('UseDecay',UseDecay)
         if ( UseDecay ) &
              call read_var('DecayTimescale in seconds', DecayTimescale)
+     case('#ELECTRONDECAY')
+        call read_var('UseElectronDecay', UseElectronDecay)
 
      case('#FLC')
         call read_var('UseFLC',UseFLC)
@@ -840,13 +843,12 @@ subroutine CIMI_set_parameters(NameAction)
      case('#SETBOUNDARYPARAMS')
         call read_var('DeltaRMax', DeltaRMax)
         call read_var('DeltaMLTmax', xmltlim)
-!        
-!     case('#PRECIPITATION')
-!        call read_var('DoCalcPrecip',DoCalcPrecip)
-!        if (DoCalcPrecip) call read_var('DtCalcPrecip',DtCalcPrecip)
-!!!$        if (DoCalcPrecip) call read_var('PrecipOutput',PrecipOutput)
-!!!$        if (PrecipOutput) call read_var('DtPreOut',DtPreOut)
-!
+       
+    case('#PRECIPITATION')
+       call read_var('UseAltitudePrecip', UseAltitudePrecip)
+       if(UseAltitudePrecip) &
+          call read_var('UsePrecipEnergyLoss', UsePrecipEnergyLoss)
+
      case('#STRICTDRIFT')
         call read_var('IsStrictDrift',IsStrictDrift) ! .T : STOP when f2 < 0
 

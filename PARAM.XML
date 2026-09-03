@@ -774,6 +774,34 @@ Default values are shown.
 
 </command>
 
+<command name="PRECIPITATION">
+  <parameter name="UseAltitudePrecip" type="logical" default="F"/>
+  <if expr="$UseAltitudePrecip">
+    <parameter name="UsePrecipEnergyLoss" type="logical" default="F"/>
+  </if>
+
+#PRECIPITATION
+F      UseAltitudePrecip
+F      UsePrecipEnergyLoss
+
+if true, CIMI will calculate precipitation fluxes based on an altitude profile
+of the thermosphere and the resulting ionization from the Fang et al. 2010 and
+2013 models. Currently the density profile is fixed, and was obtained from an
+8 hour average of densities at midnight during equinox using GITM for high
+altitudes and MSIS for lower altitudes. 
+
+If UseAltitudePrecip is True, UsePrecipEnergyLoss is read. If 
+UsePrecipEnergyLoss is true, instead of removing particles from the simulation 
+based on partial loss cones, particles that do not lose the entirety of their 
+energy to the atmosphere are maintained in the simulation and regridded to lower
+energies. Pitch angles remain unchanged through this process.
+
+If false, CIMI calculates precipitation for particles with a bounce point 
+below 120 km. 
+Default value is shown. 
+
+</command>
+
 <command name="MINIMUMPRESSURETOGM">
   <parameter name="MinimumPressureToGM" type="real" />
 
@@ -988,10 +1016,24 @@ exp(-(deltaT/DecayTimescale)) \end{verbatim} This ad hoc decay can
 improve agreement with observed recovery after magnetic storms.  The
 default DecayTimescale value of 10 hours as above seems to be close to
 optimal.  The decay term is NOT applied to the electron PSD since both
-ring current and radiation belt electrons are represented.  Rapid loss
-of electron PSD is controlled with the #STRONGDIFFUSION routine.
+ring current and radiation belt electrons are represented. This can be
+changed using the #ELECTRONDECAY command. Rapid loss of electron PSD is 
+controlled with the #STRONGDIFFUSION routine.
 
 The default is UseDecay false.
+
+</command>
+
+<command name="ELECTRONDECAY">
+  <parameter name="UseElectronDecay" type="logical" default="F"/>
+
+#ELECTRONDECAY
+F      UseElectronDecay
+
+If UseElectronDecay is true, adds exponential decay to electrons if 
+#DECAY is also used. This should not be used if the radiation belts are a 
+primary interest of the simulation. 
+Default value is shown.
 
 </command>
 
