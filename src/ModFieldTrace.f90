@@ -19,7 +19,7 @@ Module ModCimiTrace
        ekev(:,:,:,:,:), rmir(:,:,:), alscone(:,:,:,:,:),&
        tanA2(:,:,:), volume(:,:), bm(:,:,:), gamma(:,:,:,:),&
        xo(:,:), yo(:,:), tya(:,:,:), gridoc(:,:),phi2o(:,:),&
-       Tbounce(:,:,:,:,:)
+       Tbounce(:,:,:,:,:), ionization(:,:,:,:,:)
 
   real	  :: parmod(10)
 
@@ -45,6 +45,10 @@ Module ModCimiTrace
   real    :: DeltaRMax = 2.0 !Re
   real    :: xmltlim = 2.0 ! limit of field line warping in hour
 
+  logical :: UseAltitudePrecip = .false., UsePrecipEnergyLoss = .false.
+  ! About 510 km
+  real :: maxPrecipAlt = 1.08
+
   !save 5 points around min B when using Tsy model. Otherwise this is from GM in that module. Also save B values at points for both Tsy and MHD
   real, allocatable :: CurvaturePointsXyz_IIID(:,:,:,:)
   real, allocatable :: BCurvaturePoints_III(:,:,:)
@@ -59,7 +63,7 @@ Module ModCimiTrace
     allocate( bo(ir,ip),ro(ir,ip),xmlto(ir,ip),sinA(ir,ip,0:ik+1) )
     allocate(Have(ir,ip,ik),pp(nspec,ir,ip,iw,ik),vel(nspec,ir,ip,iw,ik),&
          ekev(nspec,ir,ip,iw,ik),rmir(ir,ip,ik),alscone(nspec,ir,ip,iw,ik),&
-         Tbounce(nspec,ir,ip,iw,ik),&
+         Tbounce(nspec,ir,ip,iw,ik),ionization(nspec,ir,ip,iw,ik),&
          tanA2(ir,ip,0:ik+1),phi2o(ir,ip),&
          volume(ir,ip),bm(ir,ip,ik),gamma(ir,ip,iw,ik),&
          xo(ir,ip),yo(ir,ip),tya(ir,ip,0:ik+1),gridoc(ir,ip) )
@@ -71,7 +75,7 @@ Module ModCimiTrace
   ! Routine calculates kinetic energy, velocity, y, latitude and altitude
   ! at mirror point, etc, for given magnetic moment, K and position for a
   ! given magnetic field configuration.
-  ! Output: iba,irm,iw2,vel,ekev,pp,sinA,Have,alscone             
+  ! Output: iba,irm,iw2,vel,ekev,pp,sinA,Have,alscone,ionization         
   !***********************************************************************
   subroutine fieldpara(t,dt,c,q,xlati,xmlt,phi,si,IsRestart)
     use ModCimiPlanet,		ONLY: &
@@ -81,6 +85,8 @@ Module ModCimiTrace
     use ModMpi
     use ModImTime,		ONLY: iCurrentTime_I
     use ModDstOutput,		ONLY: DstOutput
+    use ModCimiUtil,    ONLY: locate1IM
+    use CIMI_aurora, ONLY: calc_fang_loss
     
     ! uncomment when T04 Tracing fixed
     common/geopack/aa(10),sps,cps,bb(3),ps,cc(11),kk(2),dd(8)
@@ -482,8 +488,8 @@ Module ModCimiTrace
     !     loss cone particles
     do n=1,nspec
        xmass=1.673e-27*amu_I(n)
-       c2mo=c*c*xmass
-       c4mo2=c2mo*c2mo
+       c2mo=c*c*xmass ! rest mass
+       c4mo2=c2mo*c2mo ! rest mass squared
        do j=MinLonPar,MaxLonPar
           do i=1,irm(j)
              ro2=2.*ro(i,j)*re
@@ -493,7 +499,7 @@ Module ModCimiTrace
                 do k=1,iw
                    pijkm=pp1*sqrt(xmm(n,k))
                    pc=pijkm*c
-                   c2m=sqrt(pc*pc+c4mo2)
+                   c2m=sqrt(pc*pc+c4mo2) ! 
                    e=c2m-c2mo                 ! E in J
                    ekev(n,i,j,k,m)=e/1000./q    ! E in keV
                    gamma(i,j,k,m)=c2m/c2mo
@@ -502,11 +508,20 @@ Module ModCimiTrace
                    alscone(n,i,j,k,m)=1.
                    tcone2=tcone1/vel(n,i,j,k,m)      ! Tbounce/2
                    Tbounce(n,i,j,k,m)=tcone2
-                   if (rmir(i,j,m).le.rc) then
-                      x=dt/tcone2
-                      alscone(n,i,j,k,m)=0.
-                      if (x.le.80.) alscone(n,i,j,k,m)=exp(-x)
-                   endif
+                   x=dt/tcone2
+                   if(UseAltitudePrecip .and. rmir(i,j,m) < maxPrecipAlt) then
+                     alscone(n,i,j,k,m) = exp(-x)
+                     call calc_fang_loss( &
+                        ionization(n,i,j,k,m), ekev(n,i,j,k,m), rmir(i,j,m), n)
+                     if(.not.UsePrecipEnergyLoss) &
+                        alscone = 1 - ionization(n,i,j,k,m) * &
+                           (1. - alscone(n,i,j,k,m))
+                   else
+                     if (rmir(i,j,m).le.rc) then
+                        alscone(n,i,j,k,m)=0.
+                        if (x.le.80.) alscone(n,i,j,k,m)=exp(-x)
+                     endif
+                   end if
                 enddo
 
              enddo
